@@ -1,7 +1,7 @@
 // Site-wide settings. Edit these, nothing else needs to change.
 window.HV = {
   // Public address of the transcript page (shown as text and QR code).
-  talkUrl: "https://arvindcheenu.github.io/heedvision-talk/talk/",
+  talkUrl: "https://arvindchee.nu/heedvision-talk/talk/",
 
   // Cloudflare Worker that relays the presenter's slide and stores questions.
   // Leave empty to run fully offline (no follow-along, no questions).

@@ -3,6 +3,7 @@
 # (Image-based: reveal's own print view needs a visible window to lay out.)
 # Needs a local server on :8000 and Google Chrome.
 set -euo pipefail
+curl -sf -o /dev/null "${BASE:-http://127.0.0.1:8000}/index.html" || { echo "No server on ${BASE:-http://127.0.0.1:8000}; start one with: python3 -m http.server 8000" >&2; exit 1; }
 cd "$(dirname "$0")/.."
 CHROME="${CHROME:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
 BASE="${BASE:-http://127.0.0.1:8000}"

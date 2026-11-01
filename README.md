@@ -36,7 +36,7 @@ npx wrangler secret put PRESENTER_KEY
 npx wrangler deploy
 ```
 
-Put the printed `https://heedvision-live.<you>.workers.dev` URL into `js/config.js` (`live.endpoint`). If your GitHub Pages address differs from `arvindcheenu.github.io`, update `ALLOWED_ORIGINS` in `worker/wrangler.jsonc`.
+Put the printed `https://heedvision-live.<you>.workers.dev` URL into `js/config.js` (`live.endpoint`). The site is served from `arvindchee.nu` (your Pages custom domain); if that changes, update `ALLOWED_ORIGINS` in `worker/wrangler.jsonc`.
 
 To test locally, run `npx wrangler dev --port 8787` in `worker/` (it reads `PRESENTER_KEY` from `.dev.vars`). Then add `?live=http://127.0.0.1:8787` to the deck and transcript URLs.
 
