@@ -1,0 +1,16 @@
+{
+  // Deploy:  npx wrangler deploy
+  // Secret:  npx wrangler secret put PRESENTER_KEY
+  "$schema": "https://unpkg.com/wrangler@4.156.0/config-schema.json",
+  "name": "heedvision-live",
+  "main": "src/index.js",
+  "compatibility_date": "2026-09-01",
+  "durable_objects": {
+    "bindings": [{ "name": "ROOMS", "class_name": "Room" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Room"] }],
+  "vars": {
+    "ALLOWED_ORIGINS": "https://arvindcheenu.github.io,http://localhost:8000,http://127.0.0.1:8000"
+  },
+  "observability": { "enabled": true }
+}

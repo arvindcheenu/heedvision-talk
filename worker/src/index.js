@@ -1,0 +1,175 @@
+// HeedVision live relay.
+// One Durable Object per room keeps the presenter's current slide and the
+// audience's questions, and fans updates out over hibernatable WebSockets.
+//
+//   GET /rooms/:room/ws      WebSocket (add ?key=PRESENTER_KEY to present)
+//   GET /rooms/:room/state   current slide + visible questions as JSON
+import { DurableObject } from "cloudflare:workers";
+
+const MAX_TEXT = 600;
+const MAX_NAME = 60;
+const MAX_QUESTIONS = 2000;
+
+export default {
+  async fetch(req, env) {
+    const url = new URL(req.url);
+    const origin = req.headers.get("Origin") || "";
+    const allowed = (env.ALLOWED_ORIGINS || "").split(",").map((s) => s.trim()).filter(Boolean);
+    const originOk = !origin || allowed.includes("*") || allowed.includes(origin);
+
+    if (req.method === "OPTIONS") return withCors(new Response(null, { status: 204 }), origin, originOk);
+
+    const m = url.pathname.match(/^\/rooms\/([a-z0-9-]{1,40})\/(ws|state)$/i);
+    if (!m) return new Response("HeedVision live relay\n", { status: 404 });
+    if (!originOk) return new Response("Origin not allowed\n", { status: 403 });
+
+    const room = env.ROOMS.get(env.ROOMS.idFromName(m[1].toLowerCase()));
+    if (m[2] === "ws") {
+      if (req.headers.get("Upgrade") !== "websocket") return new Response("Expected a WebSocket\n", { status: 426 });
+      return room.fetch(req);
+    }
+    return withCors(await room.fetch(req), origin, originOk);
+  },
+};
+
+export class Room extends DurableObject {
+  constructor(ctx, env) {
+    super(ctx, env);
+    this.sql = ctx.storage.sql;
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS questions (
+      id TEXT PRIMARY KEY, slide TEXT, text TEXT, name TEXT,
+      votes INTEGER NOT NULL DEFAULT 0, ts INTEGER, hidden INTEGER NOT NULL DEFAULT 0)`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS votes (qid TEXT, voter TEXT, PRIMARY KEY (qid, voter))`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)`);
+    this.buckets = new Map(); // in-memory rate limits; reset when the object sleeps
+  }
+
+  async fetch(req) {
+    const url = new URL(req.url);
+    if (url.pathname.endsWith("/state")) {
+      return Response.json({ slide: this.slide(), questions: this.questions() });
+    }
+    const key = url.searchParams.get("key") || "";
+    const presenter = await isPresenterKey(key, this.env.PRESENTER_KEY);
+    const ip = req.headers.get("CF-Connecting-IP") || "local";
+    const [client, server] = Object.values(new WebSocketPair());
+    this.ctx.acceptWebSocket(server);
+    server.serializeAttachment({ presenter, ip });
+    server.send(JSON.stringify({ t: "init", presenter, slide: this.slide(), questions: this.questions() }));
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  async webSocketMessage(ws, raw) {
+    if (typeof raw !== "string" || raw.length > 4096) return;
+    let m;
+    try { m = JSON.parse(raw); } catch { return; }
+    const { presenter, ip } = ws.deserializeAttachment() || {};
+
+    if (m.t === "slide") {
+      if (!presenter) return;
+      const s = cleanSlide(m.slide);
+      if (!s) return;
+      this.sql.exec("INSERT OR REPLACE INTO meta (k, v) VALUES ('slide', ?)", JSON.stringify(s));
+      this.broadcast({ t: "slide", slide: s }, ws);
+    } else if (m.t === "ask") {
+      if (!this.allow(`ask:${ip}`, 5, 60_000)) return send(ws, { t: "error", msg: "Max 5 questions a minute, please." });
+      const text = cleanText(m.text, MAX_TEXT);
+      if (!text) return;
+      const count = this.sql.exec("SELECT COUNT(*) AS n FROM questions").one().n;
+      if (count >= MAX_QUESTIONS) return send(ws, { t: "error", msg: "This room is full." });
+      const q = {
+        id: crypto.randomUUID(),
+        slide: cleanId(m.slide) || "general",
+        text,
+        name: cleanText(m.name, MAX_NAME),
+        votes: 0,
+        ts: Date.now(),
+        hidden: false,
+      };
+      this.sql.exec("INSERT INTO questions (id, slide, text, name, votes, ts) VALUES (?, ?, ?, ?, 0, ?)", q.id, q.slide, q.text, q.name, q.ts);
+      this.broadcast({ t: "question", q });
+    } else if (m.t === "vote") {
+      if (!this.allow(`vote:${ip}`, 60, 60_000)) return;
+      const id = cleanId(m.id, 64);
+      const voter = String(m.cid || "").slice(0, 64);
+      if (!id || !voter) return;
+      const ins = this.sql.exec("INSERT OR IGNORE INTO votes (qid, voter) SELECT id, ? FROM questions WHERE id = ? AND hidden = 0", voter, id);
+      if (!ins.rowsWritten) return;
+      const votes = this.sql.exec("UPDATE questions SET votes = votes + 1 WHERE id = ? RETURNING votes", id).one().votes;
+      this.broadcast({ t: "votes", id, votes });
+    } else if (m.t === "hide") {
+      if (!presenter) return;
+      const id = cleanId(m.id, 64);
+      if (!id) return;
+      this.sql.exec("UPDATE questions SET hidden = 1 WHERE id = ?", id);
+      this.broadcast({ t: "hidden", id });
+    }
+  }
+
+  async webSocketClose() {}
+  async webSocketError() {}
+
+  slide() {
+    const row = this.sql.exec("SELECT v FROM meta WHERE k = 'slide'").toArray()[0];
+    return row ? JSON.parse(row.v) : null;
+  }
+
+  questions() {
+    return this.sql
+      .exec("SELECT id, slide, text, name, votes, ts FROM questions WHERE hidden = 0 ORDER BY ts LIMIT 1000")
+      .toArray()
+      .map((q) => ({ ...q, hidden: false }));
+  }
+
+  broadcast(msg, except) {
+    const data = JSON.stringify(msg);
+    for (const ws of this.ctx.getWebSockets()) {
+      if (ws === except) continue;
+      try { ws.send(data); } catch {}
+    }
+  }
+
+  allow(bucket, limit, windowMs) {
+    const now = Date.now();
+    const hits = (this.buckets.get(bucket) || []).filter((t) => now - t < windowMs);
+    if (hits.length >= limit) return false;
+    hits.push(now);
+    this.buckets.set(bucket, hits);
+    return true;
+  }
+}
+
+function send(ws, msg) { try { ws.send(JSON.stringify(msg)); } catch {} }
+
+function cleanText(v, max) {
+  return String(v ?? "").replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "").trim().slice(0, max);
+}
+
+function cleanId(v, max = 64) {
+  const s = String(v ?? "");
+  return s.length <= max && /^[A-Za-z0-9_-]+$/.test(s) ? s : "";
+}
+
+function cleanSlide(s) {
+  if (!s || typeof s !== "object") return null;
+  const id = cleanId(s.id);
+  if (!id) return null;
+  const int = (n) => (Number.isInteger(n) && n >= -1 && n < 1000 ? n : 0);
+  return { id, h: int(s.h), v: int(s.v), f: int(s.f), ts: Date.now() };
+}
+
+async function isPresenterKey(given, expected) {
+  if (!given || !expected) return false;
+  const enc = new TextEncoder();
+  const [a, b] = await Promise.all([given, expected].map((s) => crypto.subtle.digest("SHA-256", enc.encode(s))));
+  return crypto.subtle.timingSafeEqual(a, b);
+}
+
+function withCors(res, origin, ok) {
+  if (!origin || !ok) return res;
+  const r = new Response(res.body, res);
+  r.headers.set("Access-Control-Allow-Origin", origin);
+  r.headers.set("Vary", "Origin");
+  r.headers.set("Access-Control-Allow-Methods", "GET, OPTIONS");
+  return r;
+}

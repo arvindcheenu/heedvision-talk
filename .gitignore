@@ -1,0 +1,18 @@
+# Paper sources and conference template live here too but are not part of the site
+*.tex
+*.bib
+*.bbl
+*.bst
+*.cls
+*.eps
+diamondrule.pdf
+TODO.txt
+content/
+figures/
+*.pptx
+
+# Generated backup (attach it to the VIS upload instead)
+heedvision-vis2026.pdf
+
+.DS_Store
+.claude/
