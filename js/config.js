@@ -6,7 +6,7 @@ window.HV = {
   // Cloudflare Worker that relays the presenter's slide and stores questions.
   // Leave empty to run fully offline (no follow-along, no questions).
   live: {
-    endpoint: "",          // e.g. "https://heedvision-live.<you>.workers.dev"
+    endpoint: "https://heedvision-live.arvindcheenu.workers.dev",
     room: "vis2026",
   },
 

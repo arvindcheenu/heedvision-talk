@@ -19,7 +19,7 @@ Open http://localhost:8000. Press **S** for the speaker view (script, timer, and
 
 ## Presenting
 
-1. Open `https://<site>/?present=<PRESENTER_KEY>` on the laptop and press **S** for the speaker view.
+1. Open `https://arvindchee.nu/heedvision-talk/?present=<key>` on the laptop and press **S** for the speaker view. The key is in `worker/.presenter-key` (git-ignored). To change it, run `npx wrangler secret put PRESENTER_KEY` in `worker/`.
 2. The audience scans the QR code on the title slide. That opens `/talk/`, which scrolls along with you.
 3. The last slide shows the audience's top-voted questions. Double-click a question there to hide it.
 
